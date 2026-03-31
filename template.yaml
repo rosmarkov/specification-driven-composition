@@ -1,0 +1,109 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Specification-driven composition walkthrough
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Timeout: 30
+    MemorySize: 256
+
+Resources:
+  ArtifactsBucket:
+    Type: AWS::S3::Bucket
+
+  RegistryTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: capability_name
+          AttributeType: S
+      KeySchema:
+        - AttributeName: capability_name
+          KeyType: HASH
+
+  StateMachineExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: StepFunctionsInvokeLambdas
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource:
+                  - !GetAtt FormatDateFunction.Arn
+                  - !GetAtt NormalizeCurrencyFunction.Arn
+
+  ComposerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: composer/
+      Handler: composer.lambda_handler
+      Environment:
+        Variables:
+          REGISTRY_TABLE: !Ref RegistryTable
+          OUTPUT_BUCKET: !Ref ArtifactsBucket
+          STATE_MACHINE_ROLE_ARN: !GetAtt StateMachineExecutionRole.Arn
+      Policies:
+        - S3ReadPolicy:
+            BucketName: !Ref ArtifactsBucket
+        - S3WritePolicy:
+            BucketName: !Ref ArtifactsBucket
+        - DynamoDBCrudPolicy:
+            TableName: !Ref RegistryTable
+        - Statement:
+            - Effect: Allow
+              Action:
+                - states:CreateStateMachine
+                - states:UpdateStateMachine
+                - states:ListStateMachines
+                - states:StartExecution
+              Resource: "*"
+            - Effect: Allow
+              Action: iam:PassRole
+              Resource: !GetAtt StateMachineExecutionRole.Arn
+
+  FormatDateFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: format_date/
+      Handler: format_date.lambda_handler
+      Policies:
+        - S3ReadPolicy:
+            BucketName: !Ref ArtifactsBucket
+        - S3WritePolicy:
+            BucketName: !Ref ArtifactsBucket
+
+  NormalizeCurrencyFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: normalize_currency/
+      Handler: normalize_currency.lambda_handler
+      Policies:
+        - S3ReadPolicy:
+            BucketName: !Ref ArtifactsBucket
+        - S3WritePolicy:
+            BucketName: !Ref ArtifactsBucket
+
+Outputs:
+  ArtifactsBucketName:
+    Value: !Ref ArtifactsBucket
+  RegistryTableName:
+    Value: !Ref RegistryTable
+  ComposerFunctionName:
+    Value: !Ref ComposerFunction
+  FormatDateFunctionArn:
+    Value: !GetAtt FormatDateFunction.Arn
+  NormalizeCurrencyFunctionArn:
+    Value: !GetAtt NormalizeCurrencyFunction.Arn
